@@ -1,10 +1,27 @@
+#|
+Copyright (C) 2021  Anthony Green <green@redhat.com>
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+|#
+
 (in-package :tower-pull)
 
 (defvar *tower-server* "example.com")
 (defvar *username* nil)
 (defvar *password* nil)
 
-(defparameter +jobs-per-page+ 20)
+(defparameter +jobs-per-page+ 200)
 
 (defun top-level/options ()
   "Creates and returns the options for the top-level command"
@@ -49,15 +66,6 @@
         (error "Error ~A reading from tower API: ~A" error-code uri))
       (json:decode-json-from-string (flexi-streams:octets-to-string answer)))))
 
-(defun get-job-count ()
-  (let ((jobs (call-api "/api/v2/jobs/")))
-    (cdr (assoc :count jobs))))
-
-(defun get-last-job-page-number ()
-  (multiple-value-bind (page remainder)
-      (floor (get-job-count) +jobs-per-page+)
-    (+ page (if (> remainder 0) 1 0))))
-
 (defvar *name-cache* (make-hash-table :test 'equal))
 
 (defun lookup-name (api)
@@ -76,29 +84,13 @@
         (setf (aref tt 10) #\T)
         (local-time:parse-timestring tt))))
 
-(defun find-page-by-date (max-page-number date)
-  (loop
-    with l = 1
-    and r = max-page-number
-    for m = (floor (+ l r) 2)
-    for mth-page = (call-api (format nil "/api/v2/jobs?order_by=started&page_size=~A&page=~A" +jobs-per-page+ m))
-    if (let ((started (tower-time-to-datetime
-                       (cdr (assoc :started
-                                   (car (cdr (assoc :results mth-page))))))))
-         (format t "Searching for start date on page ~A...~%" m)
-         (local-time:timestamp< started date))
-      do (setf l m)
-    else do (setf r m)
-    until (<= (- r l) 1)
-    finally (return (max (- m 1) 1))))
-
 (defun top-level/command ()
   "Creates and return the top-level command"
   (clingon:make-command
    :name "tower-pull"
    :description "pulls job data in csv format"
    :version "1.0.0"
-   :license "AGPL3"
+   :license "GPL3"
    :usage "-t <TOWER SERVER> -u <USER NAME> -p <PASSWORD> -s <SINCE WHEN>"
    :options (top-level/options)
    :handler #'top-level/handler
@@ -121,24 +113,29 @@
           (setf *username* (clingon:getopt cmd :username))
           (setf *password* (clingon:getopt cmd :password))
           (setf *tower-server* (clingon:getopt cmd :server))
-          (loop for page from (find-page-by-date (get-last-job-page-number) report-start-time) upto (get-last-job-page-number)
-                do (let* ((json (call-api (format nil "/api/v2/jobs?order_by=started&page_size=~A&page=~A" +jobs-per-page+ page)))
-                          (results (cdr (assoc :results json))))
-                     (dolist (job results)
-                       (let ((related (cdr (assoc :related job))))
-                         (let ((org (cdr (assoc :organization related)))
-                               (prj (cdr (assoc :project related)))
-                               (playbook (cdr (assoc :playbook job)))
-                               (started (cdr (assoc :started job))))
-                           (when started
-                             (let ((start-time (tower-time-to-datetime (cdr (assoc :started job)))))
-                               (if (local-time:timestamp< report-start-time start-time)
-                                   (format t "~S, ~S, ~S, ~S, ~A~%"
-                                           (lookup-name org)
-                                           (lookup-name prj)
-                                           playbook
-                                           (local-time:format-rfc3339-timestring nil (tower-time-to-datetime (cdr (assoc :started job))))
-                                           (cdr (assoc :elapsed job)))))))))))))))
+          (loop
+            with page = (format nil "/api/v2/jobs?order_by=started&started__gt=~A&page_size=~A&page=1"
+                                (subseq (local-time:format-rfc3339-timestring nil report-start-time) 0 19)
+                                +jobs-per-page+)
+            while page
+            do (let* ((json (call-api (quri:url-decode page)))
+                      (results (cdr (assoc :results json))))
+                 (setf page (cdr (assoc :next json)))
+                 (dolist (job results)
+                   (let ((related (cdr (assoc :related job))))
+                     (let ((org (cdr (assoc :organization related)))
+                           (prj (cdr (assoc :project related)))
+                           (playbook (cdr (assoc :playbook job)))
+                           (started (cdr (assoc :started job))))
+                       (when started
+                         (let ((start-time (tower-time-to-datetime (cdr (assoc :started job)))))
+                           (if (local-time:timestamp< report-start-time start-time)
+                               (format t "~S, ~S, ~S, ~S, ~A~%"
+                                       (lookup-name org)
+                                       (lookup-name prj)
+                                       playbook
+                                       (local-time:format-rfc3339-timestring nil start-time)
+                                       (cdr (assoc :elapsed job)))))))))))))))
 
 (defun main ()
   "The main entrypoint."
