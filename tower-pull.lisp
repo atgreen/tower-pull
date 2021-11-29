@@ -66,9 +66,15 @@
    (setf (gethash api *name-cache*)
          (cdr (assoc :name (call-api api))))))
 
+;; An arbitratily far-away date, representing "far in the future"
+(defparameter +the-year-3000+ (date-time-parser:parse-date-time "3000"))
+
 (defun tower-time-to-datetime (tt)
-  (setf (aref tt 10) #\T)
-  (local-time:parse-timestring tt))
+  (if (null tt)
+      +the-year-3000+
+      (progn
+        (setf (aref tt 10) #\T)
+        (local-time:parse-timestring tt))))
 
 (defun find-page-by-date (max-page-number date)
   (loop
@@ -108,7 +114,10 @@
             (not (clingon:getopt cmd :username))
             (not (clingon:getopt cmd :password)))
         (clingon:print-usage *app* t)
-        (let ((report-start-time (chronicity:parse since)))
+        (let ((report-start-time (chronicity:parse since :context :past)))
+          (when (null report-start-time)
+            (format t "ERROR: Can't parse start time ~S~%" since)
+            (sb-ext:quit))
           (setf *username* (clingon:getopt cmd :username))
           (setf *password* (clingon:getopt cmd :password))
           (setf *tower-server* (clingon:getopt cmd :server))

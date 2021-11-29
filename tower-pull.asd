@@ -8,7 +8,7 @@
   :serial t
   :components ((:file "package")
                (:file "tower-pull"))
-  :depends-on (:cl-json :str :drakma :flexi-streams :local-time :chronicity :clingon)
+  :depends-on (:cl-json :str :drakma :flexi-streams :local-time :chronicity :clingon :cl-date-time-parser)
   :build-operation "program-op"
   :build-pathname "tower-pull"
   :entry-point "tower-pull:main")
